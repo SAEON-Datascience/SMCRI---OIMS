@@ -1,0 +1,788 @@
+from arcgis.gis import GIS
+from arcgis.features import FeatureLayerCollection
+import tempfile
+import pandas as pd
+from datetime import datetime, timedelta
+import numpy as np
+
+# ArcGIS Online Login
+gis = GIS(url='https://nrf-saeon.maps.arcgis.com/', username='Hayden_Wilson_SAEON', password='Croswetr#01')
+
+# Create a temp scratch workspace
+tmpdir = tempfile.TemporaryDirectory()
+download_folder = tmpdir.name
+
+def retrieval_update(input_df,date_column, days_until_retrieval):
+    df = input_df
+    df['proposed_retrieval_date'] = pd.to_datetime(df[date_column]) + timedelta(days=days_until_retrieval)
+    df['days_retrieval'] = (df['proposed_retrieval_date'] - datetime.now())
+    df['days_retrieval'] = df['days_retrieval']/np.timedelta64(1,'D')
+    df["Retrieval_Class"] = pd.cut(
+        x=df["days_retrieval"],
+        bins=[np.NINF, 1, 7, 14, 21, 28, np.inf],
+        labels=[6, 5, 4, 3, 2, 1]
+    )
+    return df
+
+def overwrite_flc(featurelayer_id, csv_path):
+    featurelayerCollection = FeatureLayerCollection.fromitem(gis.content.get(featurelayer_id))
+    return featurelayerCollection.manager.overwrite(csv_path)
+
+####### UTR Processing Workflow #######
+### Step 1  -Convert the latest Data from ArcGIS Online into pandas data frames
+utr_predeployment_df = gis.content.get('8fbdac5a21ae4fa8a72b7fb6bd96e6ca').tables[0].query().sdf# get the mooring pre-deployment list as a dataframe
+utr_predeployment_df = utr_predeployment_df.rename(columns={'utr_deployment_date': 'utr_proposed_deployment_date'})
+utr_master_list_AO = gis.content.search('53e24778ec7840b1aed016113b71d922', item_type="CSV")[0] #specify the master list csv's feature service
+utr_master_list_csv  = utr_master_list_AO.download(download_folder)# download the master List of all utr deployments
+utr_master_list_df = pd.read_csv(download_folder +'/Backend_master_utr_deployments.csv') #Convert the csv into a dataframe 
+utr_rollover_df = gis.content.get('6a8e41d850c24030985498de0436b208').layers[0].query().sdf# get the most recent info from the mooring rollover feature service as a dataframe
+utr_rollover_df = utr_rollover_df[utr_rollover_df.cmp_type == 'UTR']
+
+### Step 2 - identify which moorings have new fresh moorings that are ready for deployment and add them to the fresh deployments csv.
+# get the list of deployments from the mooring pre-deployment form and select the ones that are ready for deployment by comparing them with the master list
+# if an entry exists in the pre-deploymnet, but not the master, then add to the master and set the status as ready for deployment
+
+utr_master_list_df_temp = utr_master_list_df[['utr_site',
+                                              'utr_service',
+                                              'utr_mooring',
+                                              'utr_id',
+                                              'utr_ObsDB_code',
+                                              'utr_depth',
+                                              'utr_lat',
+                                              'utr_lon',
+                                              'utr_proposed_deployment_date',
+                                              'HOBO_Pos_1',
+                                              'HOBO_Pos_2',
+                                              'HOBO_Pos_3',
+                                              'HOBO_Pos_4',
+                                              'HOBO_Pos_5',
+                                              'HOBO_Pos_6',
+                                              'HOBO_Pos_7',
+                                              'Acoustic_release_code',
+                                              'Acoustic_activation_date']]
+
+utr_predeployment_df = utr_predeployment_df[['utr_site',
+                                             'utr_service',
+                                             'utr_mooring',
+                                             'utr_id',
+                                             'utr_ObsDB_code',
+                                             'utr_depth',
+                                             'utr_lat',
+                                             'utr_lon',
+                                             'utr_proposed_deployment_date',
+                                             'HOBO_Pos_1',
+                                             'HOBO_Pos_2',
+                                             'HOBO_Pos_3',
+                                             'HOBO_Pos_4',
+                                             'HOBO_Pos_5',
+                                             'HOBO_Pos_6',
+                                             'HOBO_Pos_7',
+                                             'Acoustic_release_code',
+                                             'Acoustic_activation_date']]
+utr_master_list_df_temp['utr_proposed_deployment_date'] = pd.to_datetime(utr_master_list_df_temp['utr_proposed_deployment_date'])
+utr_master_list_df_temp['Acoustic_activation_date'] = pd.to_datetime(utr_master_list_df_temp['Acoustic_activation_date'])
+utr_predeployment_df['utr_proposed_deployment_date'] = pd.to_datetime(utr_predeployment_df['utr_proposed_deployment_date'])
+utr_predeployment_df['Acoustic_activation_date'] = pd.to_datetime(utr_predeployment_df['Acoustic_activation_date'])
+
+# Compare the two data frames and select entries that do not have a corresponding partner in the current deployments list
+utr_predeployment_temp  = pd.merge(utr_predeployment_df,
+                             utr_master_list_df_temp,
+                   how='left',
+                   left_on=['utr_site',
+                            'utr_service',
+                            'utr_mooring',
+                            'utr_id',
+                            'utr_ObsDB_code',
+                            'utr_depth',
+                            'utr_lat',
+                            'utr_lon',
+                            'utr_proposed_deployment_date',
+                            'HOBO_Pos_1',
+                            'HOBO_Pos_2',
+                            'HOBO_Pos_3',
+                            'HOBO_Pos_4',
+                            'HOBO_Pos_5',
+                            'HOBO_Pos_6',
+                            'HOBO_Pos_7',
+                            'Acoustic_release_code',
+                            'Acoustic_activation_date'],
+                   right_on = ['utr_site',
+                               'utr_service',
+                               'utr_mooring',
+                               'utr_id',
+                               'utr_ObsDB_code',
+                               'utr_depth',
+                               'utr_lat',
+                               'utr_lon',
+                               'utr_proposed_deployment_date',
+                               'HOBO_Pos_1',
+                               'HOBO_Pos_2',
+                               'HOBO_Pos_3',
+                               'HOBO_Pos_4',
+                               'HOBO_Pos_5',
+                               'HOBO_Pos_6',
+                               'HOBO_Pos_7',
+                               'Acoustic_release_code',
+                               'Acoustic_activation_date'],
+                   indicator=True)
+
+utr_fresh_deployments_df = utr_predeployment_temp[utr_predeployment_temp['_merge'].str.contains('left_only')]
+
+utr_fresh_deployments_df = utr_fresh_deployments_df[['utr_site',
+                                                   'utr_service',
+                                                   'utr_mooring',
+                                                   'utr_id',
+                                                   'utr_ObsDB_code',
+                                                   'utr_depth',
+                                                   'utr_lat',
+                                                   'utr_lon',
+                                                   'utr_proposed_deployment_date',
+                                                   'HOBO_Pos_1',
+                                                   'HOBO_Pos_2',
+                                                   'HOBO_Pos_3',
+                                                   'HOBO_Pos_4',
+                                                   'HOBO_Pos_5',
+                                                   'HOBO_Pos_6',
+                                                   'HOBO_Pos_7',
+                                                   'Acoustic_release_code',
+                                                   'Acoustic_activation_date']]
+
+utr_fresh_deployments_df['status'] = 'ready for deployment' #Set the status of the mooring as ready for deployment
+
+
+# Update the fresh deployments csv in arcgis online with the new data from the mooring pre-deployment form and add that information to the master list Data Frame
+utr_fresh_deployments_csv = utr_fresh_deployments_df.to_csv(download_folder + "/Backend_fresh_utr_deployments.csv", index=False)
+utr_fresh_deployments_AO = gis.content.search('903c5205c3f64c11b5e0eb8656025170', item_type="CSV")[0]
+utr_fresh_deployments_AO.update(data = download_folder + "/Backend_fresh_utr_deployments.csv")
+
+
+#Add the new deployments to the master list Data Frame and set the date that the deployment needs to be retrieved by
+utr_master = pd.concat([utr_master_list_df,utr_fresh_deployments_df]).drop_duplicates()
+utr_master = retrieval_update(utr_master, 'Acoustic_activation_date',180)
+utr_master['proposed_retrieval_date'] = pd.to_datetime(utr_master['proposed_retrieval_date'], format= "%m-%d-%Y %H:%M:%S").dt.date
+
+utr_master_deployments_csv = utr_master.to_csv(download_folder+ '/Backend_master_utr_deployments.csv', index = False)
+utr_master_list_AO.update(data = download_folder + '/Backend_master_utr_deployments.csv')
+
+### Step 3 - use the mooring rollover feature service to identify which moorings have had a change of status (i.e. were they retrieved and a new one was deployed?)
+# update the list of utr moorings that are currently deployed
+utr_rollover_df['utr_proposed_retrieval_date'] = pd.to_datetime(utr_rollover_df['utr_proposed_retrieval_date']).dt.date
+
+#Find out which UTR's were retrieved
+utr_retrieved = utr_rollover_df[['utr_id','utr_proposed_retrieval_date', 'utr_retrieval_date']].copy(deep=True).reset_index(drop=True)
+for ind in utr_retrieved.index:
+    a = utr_master['utr_id'] == utr_retrieved.iloc[ind][0]
+    b = utr_master['proposed_retrieval_date'].astype(str).str.contains(str(utr_retrieved.iloc[ind][1]))
+    utr_master.loc[ a & b,'status'] = 'Retrieved'
+    utr_master.loc[ a & b,'actual_retrieval_date'] = utr_retrieved.iloc[ind][2]
+
+# Find out which were deployed
+utr_deployed = utr_rollover_df[['utr_id', 'utr_deployed_datetime']].copy(deep=True).reset_index(drop=True)
+for ind in utr_deployed.index:
+    a = utr_master['utr_id'] == utr_deployed.iloc[ind][0]
+    b = utr_master['status'] == 'ready for deployment'
+    utr_master.loc[ a & b,'status'] = 'Deployed'
+    utr_master.loc[ a & b,'utr_actual_deployment_date'] = utr_deployed.iloc[ind][1]
+
+# Find out which deployments were missing
+utr_missing = utr_rollover_df[['utr_id','utr_proposed_retrieval_date', 'utr_status']]
+utr_missing = utr_missing[utr_missing['utr_status'] == 'Absent'].copy(deep=True).reset_index(drop=True)
+
+
+for ind in utr_missing.index:
+    a = utr_master['utr_id'] == utr_missing.iloc[ind][0]
+    b = utr_master['proposed_retrieval_date'].astype(str).str.contains(str(utr_missing.iloc[ind][1]))
+    utr_master.loc[ a & b ,'status'] = 'Absent'
+
+# Find out which deployments had Damaged Bouys
+utr_damaged_bouy = utr_rollover_df[['utr_id','utr_proposed_retrieval_date', 'utr_damaged_bouy']]
+utr_damaged_bouy = utr_damaged_bouy[utr_damaged_bouy['utr_damaged_bouy'] == 'yes'].copy(deep=True).reset_index(drop=True)
+
+
+for ind in utr_damaged_bouy.index:
+    a = utr_master['utr_id'] == utr_damaged_bouy.iloc[ind][0]
+    b = utr_master['proposed_retrieval_date'].astype(str).str.contains(str(utr_damaged_bouy.iloc[ind][1]))
+    utr_master.loc[a & b,'status'] = 'Damaged Bouy'
+
+# Find out which deployments have missing loggers
+utr_missing_logger = utr_rollover_df[['utr_id','utr_proposed_retrieval_date', 'utr_missing_loggers']]
+utr_missing_logger = utr_missing_logger[utr_missing_logger['utr_missing_loggers'] == 'yes'].copy(deep=True).reset_index(drop=True)
+
+
+for ind in utr_missing_logger.index:
+    a = utr_master['utr_id'] == utr_missing_logger.iloc[ind][0]
+    b = utr_master['proposed_retrieval_date'].astype(str).str.contains(str(utr_missing_logger.iloc[ind][1]))
+    utr_master.loc[a & b,'status'] = 'Missing Logger'
+
+
+utr_current_deployments = utr_master[utr_master['status'] == 'Deployed']
+
+utr_current_deployments = utr_current_deployments[['utr_site',
+                                           'utr_service',
+                                           'utr_mooring',
+                                           'utr_id',
+                                           'utr_proposed_deployment_date',
+                                           'utr_actual_deployment_date',
+                                           'HOBO_Pos_1',
+                                           'HOBO_Pos_2',
+                                           'HOBO_Pos_3',
+                                           'HOBO_Pos_4',
+                                           'HOBO_Pos_5',
+                                           'HOBO_Pos_6',
+                                           'HOBO_Pos_7',
+                                           'Acoustic_release_code',
+                                           'Acoustic_activation_date',
+                                           'utr_lat',
+                                           'utr_lon',
+                                           'utr_depth',
+                                           'status',
+                                           'utr_ObsDB_code',
+                                           'proposed_retrieval_date',
+                                           'days_retrieval',
+                                           'Retrieval_Class']]
+
+# Update the utr master list of moorings to reflect the changes after mooring rollover
+utr_master = utr_master[['utr_site',
+                         'utr_service',
+                         'utr_mooring',
+                         'utr_id',
+                         'utr_proposed_deployment_date',
+                         'utr_actual_deployment_date',
+                         'HOBO_Pos_1',
+                         'HOBO_Pos_2',
+                         'HOBO_Pos_3',
+                         'HOBO_Pos_4',
+                         'HOBO_Pos_5',
+                         'HOBO_Pos_6',
+                         'HOBO_Pos_7',
+                         'Acoustic_release_code',
+                         'Acoustic_activation_date',
+                         'utr_lat',
+                         'utr_lon',
+                         'utr_depth',
+                         'status',
+                         'utr_ObsDB_code',
+                         'proposed_retrieval_date',
+                         'actual_retrieval_date',
+                         'days_retrieval',
+                         'Retrieval_Class']]
+
+utr_fresh_deployments_df = utr_master[utr_master['status'] == 'ready for deployment']
+utr_fresh_deployments_csv = utr_fresh_deployments_df.to_csv(download_folder + "/Backend_fresh_utr_deployments.csv", index=False)
+utr_fresh_deployments_AO = gis.content.search('903c5205c3f64c11b5e0eb8656025170', item_type="CSV")[0]
+utr_fresh_deployments_AO.update(data = download_folder + "/Backend_fresh_utr_deployments.csv")
+
+### Step 5 Update the csv feature services in ArcGIS Online to reflect the new data
+# Current Deployments List
+utr_current_deployments_csv = utr_current_deployments.to_csv(download_folder + '/Backend_current_utr_deployments.csv', index = False)
+utr_current_deployments_csv_AO = gis.content.search('0f7464cdb1c240de9275d9c717c9bb40', item_type="CSV")[0]
+utr_current_deployments_csv_AO.update(data = download_folder + '/Backend_current_utr_deployments.csv')
+
+
+# Master Deployments List
+utr_master_deployments_csv = utr_master.to_csv(download_folder+ '/Backend_master_utr_deployments.csv', index = False)
+utr_master_list_AO.update(data = download_folder + '/Backend_master_utr_deployments.csv')
+
+### Step 6 Update the Feature Layers for Drawing in Dashboards
+overwrite_flc('83642ec38b864903850403510ceac008', download_folder + '/Backend_current_utr_deployments.csv') # update the current deployments feature layer
+
+####### GTP Processing Workflow #######
+### Step 1  -Convert the latest Data from ArcGIS Online into pandas data frames
+gtp_predeployment_df = gis.content.get('8fbdac5a21ae4fa8a72b7fb6bd96e6ca').tables[1].query().sdf# get the mooring pre-deployment list as a dataframe
+gtp_predeployment_df = gtp_predeployment_df.rename(columns={'gtp_deployment_date': 'gtp_proposed_deployment_date'})
+gtp_master_list_AO = gis.content.search('93404d356de1445191b0dfa2119c0946', item_type="CSV")[0] #specify the master list csv's feature service
+gtp_master_list_csv  = gtp_master_list_AO.download(download_folder)# download the master List of all gtp deployments
+gtp_master_list_df = pd.read_csv(download_folder +'/Backend_master_gtp_deployments.csv') #Convert the csv into a dataframe 
+gtp_rollover_df = gis.content.get('6a8e41d850c24030985498de0436b208').layers[0].query().sdf# get the most recent info from the mooring rollover feature service as a dataframe
+gtp_rollover_df = gtp_rollover_df[gtp_rollover_df.cmp_type == 'GTP']
+gtp_rollover_df = gtp_rollover_df[['cmp_type',
+                                   'gtp_site',
+                                   'gtp_service',
+                                   'gtp_mooring',
+                                   'gtp_id',
+                                   'gtp_proposed_retrieval_date',
+                                   'gtp_retrieval_date',
+                                   'gtp_status',
+                                   'gtp_damaged',
+                                   'gtp_deployed_datetime'
+                                  ]]
+gtp_rollover_df['gtp_proposed_retrieval_date'] = pd.to_datetime(gtp_rollover_df['gtp_proposed_retrieval_date']).dt.date
+
+
+gtp_master_list_df_temp = gtp_master_list_df[['gtp_site',
+                                              'gtp_service',
+                                              'gtp_mooring',
+                                              'gtp_id',
+                                              'gtp_ObsDB_code',
+                                              'gtp_lat',
+                                              'gtp_lon',
+                                              'gtp_proposed_deployment_date',
+                                              'gtp_HOBO_SN']]
+
+gtp_predeployment_df = gtp_predeployment_df[['gtp_site',
+                                              'gtp_service',
+                                              'gtp_mooring',
+                                              'gtp_id',
+                                              'gtp_ObsDB_code',
+                                              'gtp_lat',
+                                              'gtp_lon',
+                                              'gtp_proposed_deployment_date',
+                                              'gtp_HOBO_SN']]
+gtp_master_list_df_temp['gtp_proposed_deployment_date'] = pd.to_datetime(gtp_master_list_df_temp['gtp_proposed_deployment_date'])
+gtp_predeployment_df['gtp_proposed_deployment_date'] = pd.to_datetime(gtp_predeployment_df['gtp_proposed_deployment_date'])
+
+gtp_predeployment_temp  = pd.merge(gtp_predeployment_df,
+                             gtp_master_list_df_temp,
+                   how='left',
+                   left_on=['gtp_site',
+                            'gtp_service',
+                            'gtp_mooring',
+                            'gtp_id',
+                            'gtp_ObsDB_code',
+                            'gtp_lat',
+                            'gtp_lon',
+                            'gtp_proposed_deployment_date',
+                            'gtp_HOBO_SN'],
+                   right_on = ['gtp_site',
+                            'gtp_service',
+                            'gtp_mooring',
+                            'gtp_id',
+                            'gtp_ObsDB_code',
+                            'gtp_lat',
+                            'gtp_lon',
+                            'gtp_proposed_deployment_date',
+                            'gtp_HOBO_SN'],
+                   indicator=True)
+
+gtp_fresh_deployments_df = gtp_predeployment_temp[gtp_predeployment_temp['_merge'].str.contains('left_only')]
+
+gtp_fresh_deployments_df = gtp_fresh_deployments_df[['gtp_site',
+                                                      'gtp_service',
+                                                      'gtp_mooring',
+                                                      'gtp_id',
+                                                      'gtp_ObsDB_code',
+                                                      'gtp_lat',
+                                                      'gtp_lon',
+                                                      'gtp_proposed_deployment_date',
+                                                      'gtp_HOBO_SN']]
+
+gtp_fresh_deployments_df['status'] = 'ready for deployment' #Set the status of the mooring as ready for deployment
+
+# Update the fresh deployments csv in arcgis online with the new data from the mooring pre-deployment form and add that information to the master list Data Frame
+gtp_fresh_deployments_csv = gtp_fresh_deployments_df.to_csv(download_folder + "/Backend_fresh_gtp_deployments.csv", index=False)
+gtp_fresh_deployments_AO = gis.content.search('22acfb6ad38d4ce7be7033f6f4b2d645', item_type="CSV")[0]
+gtp_fresh_deployments_AO.update(data = download_folder + "/Backend_fresh_gtp_deployments.csv")
+
+#Add the new deployments to the master list Data Frame and set the date that the deployment needs to be retrieved by
+gtp_master = pd.concat([gtp_master_list_df,gtp_fresh_deployments_df]).drop_duplicates()
+gtp_master = retrieval_update(gtp_master, 'gtp_proposed_deployment_date',180)
+gtp_master['proposed_retrieval_date'] = pd.to_datetime(gtp_master['proposed_retrieval_date'], format= "%m-%d-%Y %H:%M:%S").dt.date
+
+gtp_master_deployments_csv = gtp_master.to_csv(download_folder+ '/Backend_master_gtp_deployments.csv', index = False)
+gtp_master_list_AO.update(data = download_folder + '/Backend_master_gtp_deployments.csv')
+
+
+## Step 3 - use the mooring rollover feature service to identify which moorings have had a change of status (i.e. were they retrieved and a new one was deployed?)
+#update the list of gtp moorings that are currently deployed
+
+#Find out which UTR's were retrieved
+gtp_retrieved = gtp_rollover_df[['gtp_id','gtp_proposed_retrieval_date', 'gtp_retrieval_date']].copy(deep=True).reset_index(drop=True)
+for ind in gtp_retrieved.index:
+    a = gtp_master['gtp_id'] == gtp_retrieved.iloc[ind][0]
+    b = gtp_master['proposed_retrieval_date'].astype(str).str.contains(str(gtp_retrieved.iloc[ind][1]))
+    gtp_master.loc[ a & b,'status'] = 'Retrieved'
+    gtp_master.loc[ a & b,'actual_retrieval_date'] = gtp_retrieved.iloc[ind][2]
+
+# Find out which were deployed
+gtp_deployed = gtp_rollover_df[['gtp_id', 'gtp_deployed_datetime']].copy(deep=True).reset_index(drop=True)
+for ind in gtp_deployed.index:
+    a = gtp_master['gtp_id'] == gtp_deployed.iloc[ind][0]
+    b = gtp_master['status'] == 'ready for deployment'
+    gtp_master.loc[ a & b,'status'] = 'deployed'
+    gtp_master.loc[ a & b,'gtp_actual_deployment_date'] = gtp_deployed.iloc[ind][1]
+
+# Find out which deployments were missing
+gtp_missing = gtp_rollover_df[['gtp_id','gtp_proposed_retrieval_date', 'gtp_status']]
+gtp_missing = gtp_missing[gtp_missing['gtp_status'] == 'Absent'].copy(deep=True).reset_index(drop=True)
+
+for ind in gtp_missing.index:
+    a = gtp_master['gtp_id'] == gtp_missing.iloc[ind][0]
+    b = gtp_master['proposed_retrieval_date'].astype(str).str.contains(str(gtp_missing.iloc[ind][1]))
+    gtp_master.loc[ a & b ,'status'] = 'Absent'
+
+# Find out which deployments were damaged
+gtp_damaged = gtp_rollover_df[['gtp_id','gtp_proposed_retrieval_date', 'gtp_damaged']]
+gtp_damaged = gtp_damaged[gtp_damaged['gtp_damaged'] == 'yes'].copy(deep=True).reset_index(drop=True)
+
+for ind in gtp_damaged.index:
+    a = gtp_master['gtp_id'] == gtp_damaged.iloc[ind][0]
+    b = gtp_master['proposed_retrieval_date'].astype(str).str.contains(str(gtp_damaged.iloc[ind][1]))
+    gtp_master.loc[a & b,'status'] = 'Damaged Unit'
+
+
+gtp_current_deployments = gtp_master[gtp_master['status'] == 'deployed']
+
+
+gtp_current_deployments = gtp_current_deployments[['gtp_site',
+                                                   'gtp_service',
+                                                   'gtp_mooring',
+                                                   'gtp_id',
+                                                   'gtp_ObsDB_code',
+                                                   'gtp_lat',
+                                                   'gtp_lon',
+                                                   'gtp_proposed_deployment_date',
+                                                   'gtp_actual_deployment_date',
+                                                   'gtp_HOBO_SN',
+                                                   'status',
+                                                   'proposed_retrieval_date',
+                                                   'days_retrieval',
+                                                   'Retrieval_Class']]
+
+# Update the gtp master list of moorings to reflect the changes after mooring rollover
+gtp_fresh_deployments_df = gtp_master[gtp_master['status'] == 'ready for deployment']
+gtp_fresh_deployments_csv = gtp_fresh_deployments_df.to_csv(download_folder + "/Backend_fresh_gtp_deployments.csv", index=False)
+gtp_fresh_deployments_AO = gis.content.search('22acfb6ad38d4ce7be7033f6f4b2d645', item_type="CSV")[0]
+gtp_fresh_deployments_AO.update(data = download_folder + "/Backend_fresh_gtp_deployments.csv")
+
+### Step 5 Update the csv feature services in ArcGIS Online to reflect the new data
+# Current Deployments List
+gtp_current_deployments_csv = gtp_current_deployments.to_csv(download_folder + '/Backend_current_gtp_deployments.csv', index = False)
+gtp_current_deployments_csv_AO = gis.content.search('7f1d5815fe174dfb9a9f56c6f243bd37', item_type="CSV")[0]
+gtp_current_deployments_csv_AO.update(data = download_folder + '/Backend_current_gtp_deployments.csv')
+
+# Master Deployments List
+gtp_master_deployments_csv = gtp_master.to_csv(download_folder+ '/Backend_master_gtp_deployments.csv', index = False)
+gtp_master_list_AO.update(data = download_folder + '/Backend_master_gtp_deployments.csv')
+
+### Step 6 Update the Feature Layers for Drawing in Dashboards
+overwrite_flc('f18b5586ad1541f3b9d918faba9ae814', download_folder + '/Backend_current_gtp_deployments.csv') # update the current deployments feature layer
+
+####### ADCP Processing Workflow #######
+### Step 1  -Convert the latest Data from ArcGIS Online into pandas data frames
+adcp_predeployment_df = gis.content.get('8fbdac5a21ae4fa8a72b7fb6bd96e6ca').tables[2].query().sdf# get the mooring pre-deployment list as a dataframe
+adcp_predeployment_df = adcp_predeployment_df.rename(columns={'adcp_deployment_date': 'adcp_proposed_deployment_date'})
+adcp_master_list_AO = gis.content.search('dd9c4fe931b141478c52c6fa6f31b274', item_type="CSV")[0] #specify the master list csv's feature service
+adcp_master_list_csv  = adcp_master_list_AO.download(download_folder)# download the master List of all gtp deployments
+adcp_master_list_df = pd.read_csv(download_folder +'/Backend_master_adcp_deployments.csv') #Convert the csv into a dataframe 
+adcp_rollover_df = gis.content.get('6a8e41d850c24030985498de0436b208').layers[0].query().sdf# get the most recent info from the mooring rollover feature service as a dataframe
+adcp_rollover_df = adcp_rollover_df[adcp_rollover_df.cmp_type == 'ADCP']
+adcp_rollover_df = adcp_rollover_df[['cmp_type',
+                                     'adcp_site',
+                                     'adcp_mooring',
+                                     'adcp_id',
+                                     'adcp_type',
+                                     'adcp_proposed_retrieval_date',
+                                     'adcp_retrieval_date',
+                                     'adcp_status',
+                                     'adcp_damaged',
+                                     'adcp_rollover_imei',
+                                     'adcp_rollover_acoustic_release_code',
+                                     'adcp_deployed_datetime']]
+
+adcp_rollover_df['adcp_proposed_retrieval_date'] = pd.to_datetime(adcp_rollover_df['adcp_proposed_retrieval_date']).dt.date
+
+adcp_master_list_df_temp = adcp_master_list_df[['adcp_site',
+                                              'adcp_mooring',
+                                              'adcp_id',
+                                              'adcp_type',
+                                              'adcp_lat',
+                                              'adcp_lon',
+                                              'adcp_proposed_deployment_date']]
+
+adcp_predeployment_df = adcp_predeployment_df[['adcp_site',
+                                              'adcp_mooring',
+                                              'adcp_id',
+                                              'adcp_type',
+                                              'adcp_lat',
+                                              'adcp_lon',
+                                              'adcp_proposed_deployment_date']]
+adcp_master_list_df_temp['adcp_proposed_deployment_date'] = pd.to_datetime(adcp_master_list_df_temp['adcp_proposed_deployment_date'])
+adcp_predeployment_df['adcp_proposed_deployment_date'] = pd.to_datetime(adcp_predeployment_df['adcp_proposed_deployment_date'])
+
+adcp_predeployment_temp  = pd.merge(adcp_predeployment_df,
+                             adcp_master_list_df_temp,
+                   how='left',
+                   left_on=['adcp_site',
+                            'adcp_mooring',
+                            'adcp_id',
+                            'adcp_type',
+                            'adcp_lat',
+                            'adcp_lon',
+                            'adcp_proposed_deployment_date'],
+                   right_on = ['adcp_site',
+                            'adcp_mooring',
+                            'adcp_id',
+                            'adcp_type',
+                            'adcp_lat',
+                            'adcp_lon',
+                            'adcp_proposed_deployment_date'],
+                   indicator=True)
+
+adcp_fresh_deployments_df = adcp_predeployment_temp[adcp_predeployment_temp['_merge'].str.contains('left_only')]
+
+adcp_fresh_deployments_df = adcp_fresh_deployments_df[['adcp_site',
+                            'adcp_mooring',
+                            'adcp_id',
+                            'adcp_type',
+                            'adcp_lat',
+                            'adcp_lon',
+                            'adcp_proposed_deployment_date']].copy(deep=True).reset_index(drop=True)
+
+adcp_fresh_deployments_df['status'] = 'ready for deployment' #Set the status of the mooring as ready for deployment
+
+# Update the fresh deployments csv in arcgis online with the new data from the mooring pre-deployment form and add that information to the master list Data Frame
+adcp_fresh_deployments_csv = adcp_fresh_deployments_df.to_csv(download_folder + "/Backend_fresh_adcp_deployments.csv", index=False)
+adcp_fresh_deployments_AO = gis.content.search('22b4d1c1488d43ca84f0133b504063c2', item_type="CSV")[0]
+adcp_fresh_deployments_AO.update(data = download_folder + "/Backend_fresh_adcp_deployments.csv")
+
+#Add the new deployments to the master list Data Frame and set the date that the deployment needs to be retrieved by
+adcp_master = pd.concat([adcp_master_list_df,adcp_fresh_deployments_df]).drop_duplicates()
+adcp_master = retrieval_update(adcp_master, 'adcp_proposed_deployment_date',180)
+adcp_master['proposed_retrieval_date'] = pd.to_datetime(adcp_master['proposed_retrieval_date'], format= "%m-%d-%Y %H:%M:%S").dt.date
+
+adcp_master_deployments_csv = adcp_master.to_csv(download_folder+ '/Backend_master_adcp_deployments.csv', index = False)
+adcp_master_list_AO.update(data = download_folder + '/Backend_master_adcp_deployments.csv')
+
+
+## Step 3 - use the mooring rollover feature service to identify which moorings have had a change of status (i.e. were they retrieved and a new one was deployed?)
+#update the list of adcp moorings that are currently deployed
+
+#Find out which UTR's were retrieved
+adcp_retrieved = adcp_rollover_df[['adcp_id','adcp_proposed_retrieval_date', 'adcp_retrieval_date']].copy(deep=True).reset_index(drop=True)
+
+for ind in adcp_retrieved.index:
+    a = adcp_master['adcp_id'] == adcp_retrieved.iloc[ind][0]
+    b = adcp_master['proposed_retrieval_date'].astype(str).str.contains(str(adcp_retrieved.iloc[ind][1]))
+    adcp_master.loc[ a & b,'status'] = 'Retrieved'
+    adcp_master.loc[ a & b,'actual_retrieval_date'] = adcp_retrieved.iloc[ind][2]
+    
+# Find out which were deployed
+adcp_deployed = adcp_rollover_df[['adcp_id', 'adcp_deployed_datetime']].copy(deep=True).reset_index(drop=True)
+
+for ind in adcp_deployed.index:
+    a = adcp_master['adcp_id'] == adcp_deployed.iloc[ind][0]
+    b = adcp_master['status'] == 'ready for deployment'
+    adcp_master.loc[ a & b,'status'] = 'deployed'
+    adcp_master.loc[ a & b,'adcp_actual_deployment_date'] = adcp_deployed.iloc[ind][1]
+
+# Find out which deployments were missing
+adcp_missing = adcp_rollover_df[['adcp_id','adcp_proposed_retrieval_date', 'adcp_status']]
+adcp_missing = adcp_missing[adcp_missing['adcp_status'] == 'Absent'].copy(deep=True).reset_index(drop=True)
+
+for ind in adcp_missing.index:
+    a = adcp_master['adcp_id'] == adcp_missing.iloc[ind][0]
+    b = adcp_master['proposed_retrieval_date'].astype(str).str.contains(str(adcp_missing.iloc[ind][1]))
+    adcp_master.loc[ a & b ,'status'] = 'Absent'
+
+# Find out which deployments were damaged
+adcp_damaged = adcp_rollover_df[['adcp_id','adcp_proposed_retrieval_date', 'adcp_damaged']]
+adcp_damaged = adcp_damaged[adcp_damaged['adcp_damaged'] == 'yes'].copy(deep=True).reset_index(drop=True)
+
+for ind in adcp_damaged.index:
+    a = adcp_master['adcp_id'] == adcp_damaged.iloc[ind][0]
+    b = adcp_master['proposed_retrieval_date'].astype(str).str.contains(str(adcp_damaged.iloc[ind][1]))
+    adcp_master.loc[a & b,'status'] = 'Damaged Unit'
+
+adcp_current_deployments = adcp_master[adcp_master['status'] == 'deployed']
+
+adcp_current_deployments = adcp_current_deployments[['adcp_site',
+                                                   'adcp_mooring',
+                                                   'adcp_id',
+                                                   'adcp_ObsDb_Code',
+                                                   'adcp_type',
+                                                   'adcp_lat',
+                                                   'adcp_lon',
+                                                   'adcp_proposed_deployment_date',
+                                                   'adcp_actual_deployment_date',
+                                                   'adcp_imei',
+                                                   'adcp_acoustic_release',
+                                                   'status',
+                                                   'proposed_retrieval_date',
+                                                   'days_retrieval',
+                                                   'Retrieval_Class']]
+
+# Update the gtp master list of moorings to reflect the changes after mooring rollover
+adcp_fresh_deployments_df = adcp_master[adcp_master['status'] == 'ready for deployment']
+adcp_fresh_deployments_csv = adcp_fresh_deployments_df.to_csv(download_folder + "/Backend_fresh_adcp_deployments.csv", index=False)
+adcp_fresh_deployments_AO.update(data = download_folder + "/Backend_fresh_adcp_deployments.csv")
+
+### Step 5 Update the csv feature services in ArcGIS Online to reflect the new data
+# Current Deployments List
+adcp_current_deployments_csv = adcp_current_deployments.to_csv(download_folder + '/Backend_current_adcp_deployments.csv', index = False)
+adcp_current_deployments_csv_AO = gis.content.search('f456d0580f2845aa9a0a38283da40608', item_type="CSV")[0]
+adcp_current_deployments_csv_AO.update(data = download_folder + '/Backend_current_adcp_deployments.csv')
+
+# Master Deployments List
+adcp_master_deployments_csv = adcp_master.to_csv(download_folder+ '/Backend_master_adcp_deployments.csv', index = False)
+adcp_master_list_AO.update(data = download_folder + '/Backend_master_adcp_deployments.csv')
+
+### Step 6 Update the Feature Layers for Drawing in Dashboards
+overwrite_flc('9151a61b36f742478a1e457e5c78e286', download_folder + '/Backend_current_adcp_deployments.csv') # update the current deployments feature layer
+
+####### CT Probe Processing Workflow #######
+### Step 1  -Convert the latest Data from ArcGIS Online into pandas data frames
+ct_predeployment_df = gis.content.get('8fbdac5a21ae4fa8a72b7fb6bd96e6ca').tables[3].query().sdf# get the mooring pre-deployment list as a dataframe
+ct_predeployment_df = ct_predeployment_df.rename(columns={'ct_deployment_date': 'ct_proposed_deployment_date'})
+ct_predeployment_df = ct_predeployment_df.rename(columns={'ct_mooring': 'ct_river'})
+ct_master_list_AO = gis.content.search('f78cdbad9e2644c49a37d170f1e38a5a', item_type="CSV")[0] #specify the master list csv's feature service
+ct_master_list_csv  = ct_master_list_AO.download(download_folder)# download the master List of all gtp deployments
+ct_master_list_df = pd.read_csv(download_folder +'/Backend_master_ct_deployments.csv') #Convert the csv into a dataframe 
+ct_rollover_df = gis.content.get('6a8e41d850c24030985498de0436b208').layers[0].query().sdf# get the most recent info from the mooring rollover feature service as a dataframe
+ct_rollover_df = ct_rollover_df[ct_rollover_df.cmp_type == 'CT']
+
+ct_rollover_df = ct_rollover_df[['cmp_type',
+                                 'ct_site',
+                                 'ct_service',
+                                 'ct_river',
+                                 'ct_reach',
+                                 'ct_id',
+                                 'ct_proposed_retrieval_date',
+                                 'ct_serial_retrieved',
+                                 'ct_retrieval_date',
+                                 'ct_status',
+                                 'ct_damaged',
+                                 'ct_serial_deployed',
+                                 'ct_deployed_datetime']]
+
+ct_rollover_df['ct_proposed_retrieval_date'] = pd.to_datetime(ct_rollover_df['ct_proposed_retrieval_date']).dt.date
+
+ct_master_list_df_temp = ct_master_list_df[['ct_site',
+                                            'ct_service',
+                                            'ct_river',
+                                            'ct_reach',
+                                            'ct_id',
+                                            'ct_serial',
+                                            'ct_lat',
+                                            'ct_lon',
+                                            'ct_proposed_deployment_date']]
+
+ct_predeployment_df = ct_predeployment_df[['ct_site',
+                                            'ct_service',
+                                            'ct_river',
+                                            'ct_reach',
+                                            'ct_id',
+                                            'ct_serial',
+                                            'ct_lat',
+                                            'ct_lon',
+                                            'ct_proposed_deployment_date']]
+ct_master_list_df_temp['ct_proposed_deployment_date'] = pd.to_datetime(ct_master_list_df_temp['ct_proposed_deployment_date'])
+ct_predeployment_df['ct_proposed_deployment_date'] = pd.to_datetime(ct_predeployment_df['ct_proposed_deployment_date'])
+
+ct_predeployment_temp  = pd.merge(ct_predeployment_df,
+                             ct_master_list_df_temp,
+                   how='left',
+                   left_on=['ct_site',
+                            'ct_river',
+                            'ct_id',
+                            'ct_serial',
+                            'ct_lat',
+                            'ct_lon',
+                            'ct_proposed_deployment_date'],
+                   right_on = ['ct_site',
+                            'ct_river',
+                            'ct_id',
+                            'ct_serial',
+                            'ct_lat',
+                            'ct_lon',
+                            'ct_proposed_deployment_date'],
+                   indicator=True)
+
+ct_fresh_deployments_df = ct_predeployment_temp[ct_predeployment_temp['_merge'].str.contains('left_only')]
+
+ct_fresh_deployments_df = ct_fresh_deployments_df[['ct_site',
+                                                     'ct_river',
+                                                     'ct_id',
+                                                     'ct_serial',
+                                                     'ct_lat',
+                                                     'ct_lon',
+                                                     'ct_proposed_deployment_date']].copy(deep=True).reset_index(drop=True)
+
+
+ct_fresh_deployments_df['status'] = 'ready for deployment' #Set the status of the mooring as ready for deployment
+
+# Update the fresh deployments csv in arcgis online with the new data from the mooring pre-deployment form and add that information to the master list Data Frame
+ct_fresh_deployments_csv = ct_fresh_deployments_df.to_csv(download_folder + "/Backend_fresh_ct_deployments.csv", index=False)
+ct_fresh_deployments_AO = gis.content.search('a2896f06c8ed40c68fbae519d581957e', item_type="CSV")[0]
+ct_fresh_deployments_AO.update(data = download_folder + "/Backend_fresh_ct_deployments.csv")
+
+#Add the new deployments to the master list Data Frame and set the date that the deployment needs to be retrieved by
+ct_master = pd.concat([ct_master_list_df,ct_fresh_deployments_df]).drop_duplicates()
+ct_master['ct_proposed_deployment_date'] = pd.to_datetime(ct_master['ct_proposed_deployment_date']).dt.date
+ct_master = retrieval_update(ct_master, 'ct_proposed_deployment_date',180)
+ct_master['proposed_retrieval_date'] = pd.to_datetime(ct_master['proposed_retrieval_date'], format= "%m-%d-%Y %H:%M:%S").dt.date
+ct_master_deployments_csv = ct_master.to_csv(download_folder+ '/Backend_master_ct_deployments.csv', index = False)
+ct_master_list_AO.update(data = download_folder + '/Backend_master_ct_deployments.csv')
+
+
+## Step 3 - use the mooring rollover feature service to identify which moorings have had a change of status (i.e. were they retrieved and a new one was deployed?)
+#update the list of adcp moorings that are currently deployed
+
+#Find out which UTR's were retrieved
+ct_retrieved = ct_rollover_df[['ct_id','ct_proposed_retrieval_date', 'ct_retrieval_date']].copy(deep=True).reset_index(drop=True)
+
+for ind in ct_retrieved.index:
+    a = ct_master['ct_id'] == ct_retrieved.iloc[ind][0]
+    b = ct_master['proposed_retrieval_date'].astype(str).str.contains(str(ct_retrieved.iloc[ind][1]))
+    ct_master.loc[ a & b,'status'] = 'Retrieved'
+    ct_master.loc[ a & b,'actual_retrieval_date'] = ct_retrieved.iloc[ind][2]
+
+# Find out which were deployed
+ct_deployed = ct_rollover_df[['ct_id', 'ct_deployed_datetime']].copy(deep=True).reset_index(drop=True)
+
+for ind in ct_deployed.index:
+    a = ct_master['ct_id'] == ct_deployed.iloc[ind][0]
+    b = ct_master['status'] == 'ready for deployment'
+    ct_master.loc[ a & b,'status'] = 'deployed'
+    ct_master.loc[ a & b,'ct_actual_deployment_date'] = ct_deployed.iloc[ind][1]
+
+# Find out which deployments were missing
+ct_missing = ct_rollover_df[['ct_id','ct_proposed_retrieval_date', 'ct_status']]
+ct_missing = ct_missing[ct_missing['ct_status'] == 'Absent'].copy(deep=True).reset_index(drop=True)
+
+for ind in ct_missing.index:
+    a = ct_master['ct_id'] == ct_missing.iloc[ind][0]
+    b = ct_master['proposed_retrieval_date'].astype(str).str.contains(str(ct_missing.iloc[ind][1]))
+    ct_master.loc[ a & b ,'status'] = 'Absent'
+
+# Find out which deployments were damaged
+ct_damaged = ct_rollover_df[['ct_id','ct_proposed_retrieval_date', 'ct_damaged']]
+ct_damaged = ct_damaged[ct_damaged['ct_damaged'] == 'yes'].copy(deep=True).reset_index(drop=True)
+
+for ind in ct_damaged.index:
+    a = ct_master['ct_id'] == ct_damaged.iloc[ind][0]
+    b = ct_master['proposed_retrieval_date'].astype(str).str.contains(str(ct_damaged.iloc[ind][1]))
+    ct_master.loc[a & b,'status'] = 'Damaged Unit'
+
+ct_current_deployments = ct_master[ct_master['status'] == 'deployed']
+
+
+ct_current_deployments = ct_current_deployments[['ct_site',
+                                                 'ct_river',
+                                                 'ct_id',
+                                                 'ct_serial',
+                                                 'ct_lat',
+                                                 'ct_lon',
+                                                 'ct_proposed_deployment_date',
+                                                 'ct_actual_deployment_date',
+                                                 'status',
+                                                 'proposed_retrieval_date',
+                                                 'days_retrieval',
+                                                 'Retrieval_Class']]
+
+# Update the gtp master list of moorings to reflect the changes after mooring rollover
+ct_fresh_deployments_df = ct_master[ct_master['status'] == 'ready for deployment']
+ct_fresh_deployments_csv = ct_fresh_deployments_df.to_csv(download_folder + "/Backend_fresh_ct_deployments.csv", index=False)
+ct_fresh_deployments_AO.update(data = download_folder + "/Backend_fresh_ct_deployments.csv")
+
+### Step 5 Update the csv feature services in ArcGIS Online to reflect the new data
+# Current Deployments List
+ct_current_deployments_csv = ct_current_deployments.to_csv(download_folder + '/Backend_current_ct_deployments.csv', index = False)
+ct_current_deployments_csv_AO = gis.content.search('4ddc1013edac4f2db84548980fdbec63', item_type="CSV")[0]
+ct_current_deployments_csv_AO.update(data = download_folder + '/Backend_current_ct_deployments.csv')
+
+# Master Deployments List
+ct_master_deployments_csv = ct_master.to_csv(download_folder+ '/Backend_master_ct_deployments.csv', index = False)
+ct_master_list_AO.update(data = download_folder + '/Backend_master_ct_deployments.csv')
+
+### Step 6 Update the Feature Layers for Drawing in Dashboards
+overwrite_flc('e3bac0e3eb3b4249b019e45d4bf78c6e', download_folder + '/Backend_current_ct_deployments.csv') # update the current deployments feature layer

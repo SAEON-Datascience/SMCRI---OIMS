@@ -1,3 +1,9 @@
+# this script was developed to update the various datasets hosted in arcgis online when new data is added to the mooring predeployment form 
+# and the mooring rollover forms from survey123. It is scheduled to run ever 30 minutes in order to ensure that the feature services in ArcGIS online are always
+# up to date. This script is likely to be full of bugs as I rushed it, so please check it extensively before relying on it.
+
+# Good Luck! \_('~')_/
+
 from arcgis.gis import GIS
 from arcgis.features import FeatureLayerCollection
 import tempfile
